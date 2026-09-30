@@ -53,7 +53,7 @@ def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not user.is_active:
+    if not user.is_active:  
         raise HTTPException(status_code=403, detail="Account is disabled")
 
     return TokenResponse(access_token=create_access_token(user.id))

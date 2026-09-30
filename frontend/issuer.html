@@ -1,0 +1,890 @@
+<!doctype html>
+
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>CertiChain | Issuer Dashboard</title>
+
+    <link rel="stylesheet" href="style.css" />
+
+    <style>
+      body {
+        min-height: 100vh;
+      }
+
+      .issuer-page {
+        max-width: 900px;
+
+        margin: 0 auto;
+
+        padding: 40px 20px 80px;
+      }
+
+      .issuer-card {
+        background: rgba(255, 255, 255, 0.72);
+
+        border: 1px solid rgba(0, 0, 0, 0.08);
+
+        border-radius: 24px;
+
+        padding: 28px;
+
+        margin-top: 24px;
+      }
+
+      .issuer-card h1 {
+        margin-top: 0;
+      }
+
+      .field {
+        display: grid;
+
+        gap: 8px;
+
+        margin: 16px 0;
+      }
+
+      .field label {
+        font-weight: 700;
+      }
+
+      .field input {
+        width: 100%;
+
+        box-sizing: border-box;
+
+        padding: 13px 14px;
+
+        border-radius: 12px;
+
+        border: 1px solid #ccc;
+
+        font: inherit;
+      }
+
+      .issuer-actions {
+        display: flex;
+
+        flex-wrap: wrap;
+
+        gap: 12px;
+
+        margin-top: 20px;
+      }
+
+      .issuer-status {
+        margin-top: 18px;
+
+        padding: 14px;
+
+        border-radius: 12px;
+
+        background: #f4f4f4;
+
+        white-space: pre-wrap;
+
+        word-break: break-word;
+      }
+
+      .small {
+        color: #666;
+
+        font-size: 0.92rem;
+      }
+
+      .danger {
+        background: #fff0f0;
+      }
+
+      a {
+        color: inherit;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="issuer-page">
+      <a href="index.html"> ← Public certificate validator </a>
+
+      <div class="issuer-card">
+        <div class="eyebrow">
+          <span class="pulse"></span>
+
+          CERTICHAIN ISSUER
+        </div>
+
+        <h1>Issue a certificate with MetaMask</h1>
+
+        <p class="small">
+          The certificate file stays off-chain. Its SHA-256 fingerprint is
+          registered on Ethereum Sepolia by the connected MetaMask account.
+        </p>
+
+        <div class="issuer-actions">
+          <button class="primary-button" id="connectButton">
+            CONNECT METAMASK
+          </button>
+
+          <span id="walletStatus" class="small"> Wallet not connected </span>
+        </div>
+
+        <form id="issueForm">
+          <div class="field">
+            <label for="studentName"> Student name </label>
+
+            <input id="studentName" required maxlength="150" />
+          </div>
+
+          <div class="field">
+            <label for="certificateType"> Certificate type </label>
+
+            <input
+              id="certificateType"
+              required
+              maxlength="150"
+              placeholder="e.g. B.Tech Degree"
+            />
+          </div>
+
+          <div class="field">
+            <label for="institution"> Institution </label>
+
+            <input id="institution" required maxlength="255" />
+          </div>
+
+          <div class="field">
+            <label for="certificateFile"> Certificate file </label>
+
+            <input
+              id="certificateFile"
+              type="file"
+              required
+              accept=".pdf,.png,.jpg,.jpeg,.webp"
+            />
+          </div>
+
+          <button class="primary-button" type="submit">
+            PREPARE & REGISTER ON SEPOLIA →
+          </button>
+        </form>
+
+        <div id="status" class="issuer-status">Ready.</div>
+      </div>
+
+      <div class="issuer-card">
+        <h2>Revoke certificate</h2>
+
+        <p class="small">
+          Only the MetaMask account that owns the deployed contract can revoke a
+          certificate.
+        </p>
+
+        <div class="field">
+          <label for="revokeId"> Certificate ID </label>
+
+          <input id="revokeId" placeholder="CERT-XXXXXXXXXX" />
+        </div>
+
+        <button class="primary-button" id="revokeButton" type="button">
+          REVOKE WITH METAMASK
+        </button>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
+
+    <script>
+      /*
+============================================================
+CERTICHAIN CONFIGURATION
+============================================================
+*/
+
+      const API_BASE_URL =
+        window.CERTICHAIN_API_URL || "http://127.0.0.1:8000/api";
+
+      const SEPOLIA_CHAIN_ID = 11155111;
+
+      const SEPOLIA_HEX = "0xaa36a7";
+
+      /*
+============================================================
+IMPORTANT
+============================================================
+
+After deploying CertificateRegistry.sol with Remix,
+replace PASTE_CONTRACT_ADDRESS below.
+
+Example:
+
+const CONTRACT_ADDRESS =
+    "0x123456789...";
+*/
+
+      const CONTRACT_ADDRESS =
+        "0x780d2fbf8208d0f56b5fa3D9e775B82980E82d6f";
+
+      const ETHERSCAN_BASE_URL =
+  "https://sepolia.etherscan.io";
+
+      console.log("=== CERTICHAIN DEBUG ===");
+      console.log("CONTRACT_ADDRESS:", CONTRACT_ADDRESS);
+      console.log(
+        "window.CERTICHAIN_CONTRACT_ADDRESS:",
+        window.CERTICHAIN_CONTRACT_ADDRESS,
+      );
+
+      /*
+============================================================
+CONTRACT ABI
+============================================================
+*/
+
+      const ABI = [
+        "function owner() view returns (address)",
+
+        "function registerCertificate(string certificateId, bytes32 certificateHash)",
+
+        "function revokeCertificate(string certificateId)",
+
+        "function getCertificate(string certificateId) view returns (bytes32 certificateHash, address issuer, uint256 timestamp, bool exists, bool revoked)",
+      ];
+
+      const contractInterface = new ethers.Interface(ABI);
+
+      let provider;
+
+      let signer;
+
+      let contract;
+
+      const statusEl = document.getElementById("status");
+
+      const walletStatus = document.getElementById("walletStatus");
+
+      function setStatus(message, error = false) {
+        statusEl.textContent = message;
+
+        statusEl.classList.toggle("danger", error);
+      }
+      function showTransactionResult({
+  title,
+  certificateId,
+  issuer,
+  transactionHash,
+  message
+}) {
+  statusEl.classList.remove("danger");
+
+  statusEl.innerHTML = "";
+
+  const titleEl = document.createElement("strong");
+  titleEl.textContent = title;
+
+  const content = document.createElement("div");
+
+  content.style.marginTop = "12px";
+
+  content.innerHTML = `
+    <div>
+      <strong>Certificate ID:</strong>
+      ${certificateId}
+    </div>
+
+    ${
+      issuer
+        ? `
+          <div style="margin-top:8px;">
+            <strong>Issuer:</strong>
+            ${issuer}
+          </div>
+        `
+        : ""
+    }
+
+    <div style="margin-top:8px;">
+      <strong>Transaction:</strong>
+      <code style="word-break:break-all;">
+        ${transactionHash}
+      </code>
+    </div>
+
+    <div style="margin-top:14px;">
+      <a
+        href="${ETHERSCAN_BASE_URL}/tx/${transactionHash}"
+        target="_blank"
+        rel="noopener noreferrer"
+        style="font-weight:700;"
+      >
+        View transaction on Sepolia Etherscan ↗
+      </a>
+    </div>
+
+    ${
+      message
+        ? `
+          <div style="margin-top:14px;">
+            ${message}
+          </div>
+        `
+        : ""
+    }
+  `;
+
+  statusEl.appendChild(titleEl);
+  statusEl.appendChild(content);
+}
+
+      /*
+============================================================
+CONNECT METAMASK
+============================================================
+*/
+
+      async function connectWallet() {
+        if (!window.ethereum) {
+          setStatus(
+            "MetaMask was not detected. " + "Install MetaMask in Chrome first.",
+
+            true,
+          );
+
+          return;
+        }
+
+        provider = new ethers.BrowserProvider(window.ethereum);
+
+        await provider.send("eth_requestAccounts", []);
+
+        let network = await provider.getNetwork();
+
+        /*
+    --------------------------------------------------------
+    Make sure we're on Sepolia
+    --------------------------------------------------------
+    */
+
+        if (Number(network.chainId) !== SEPOLIA_CHAIN_ID) {
+          try {
+            await window.ethereum.request({
+              method: "wallet_switchEthereumChain",
+
+              params: [
+                {
+                  chainId: SEPOLIA_HEX,
+                },
+              ],
+            });
+          } catch (switchError) {
+            if (switchError.code === 4902) {
+              await window.ethereum.request({
+                method: "wallet_addEthereumChain",
+
+                params: [
+                  {
+                    chainId: SEPOLIA_HEX,
+
+                    chainName: "Sepolia",
+
+                    nativeCurrency: {
+                      name: "Sepolia ETH",
+
+                      symbol: "ETH",
+
+                      decimals: 18,
+                    },
+
+                    rpcUrls: ["https://ethereum-sepolia-rpc.publicnode.com"],
+
+                    blockExplorerUrls: ["https://sepolia.etherscan.io"],
+                  },
+                ],
+              });
+            } else {
+              throw switchError;
+            }
+          }
+
+          provider = new ethers.BrowserProvider(window.ethereum);
+        }
+
+        signer = await provider.getSigner();
+
+        const address = await signer.getAddress();
+
+        if (CONTRACT_ADDRESS === "PASTE_CONTRACT_ADDRESS") {
+          walletStatus.textContent = "Connected: " + address;
+
+          setStatus(
+            "MetaMask connected, but you still " +
+              "need to put your deployed contract " +
+              "address into issuer.html.",
+
+            true,
+          );
+
+          return;
+        }
+
+        contract = new ethers.Contract(
+          CONTRACT_ADDRESS,
+
+          ABI,
+
+          signer,
+        );
+        console.log("Contract object address:", await contract.getAddress());
+        console.log("Signer address:", await signer.getAddress());
+        console.log("Network:", await provider.getNetwork());
+
+        const owner = await contract.owner();
+
+        walletStatus.textContent = "Connected: " + address;
+
+        if (owner.toLowerCase() === address.toLowerCase()) {
+          setStatus(
+            "MetaMask connected. " + "This account is the contract owner.",
+          );
+        } else {
+          setStatus(
+            "MetaMask connected, but this account " +
+              "is NOT the contract owner. " +
+              "Issuance and revocation will fail.",
+
+            true,
+          );
+        }
+      }
+
+      document
+        .getElementById("connectButton")
+        .addEventListener("click", async () => {
+          try {
+            setStatus("Connecting to MetaMask...");
+            await connectWallet();
+          } catch (error) {
+            console.error("MetaMask connection error:", error);
+
+            setStatus(
+              error.shortMessage ||
+                error.message ||
+                "Failed to connect MetaMask.",
+              true,
+            );
+          }
+        });
+
+      /*
+============================================================
+PREPARE CERTIFICATE
+============================================================
+*/
+
+      async function prepareCertificate() {
+        const file = document.getElementById("certificateFile").files[0];
+
+        if (!file) {
+          throw new Error("Choose a certificate file.");
+        }
+
+        const body = new FormData();
+
+        body.append("file", file);
+
+        body.append(
+          "student_name",
+
+          document.getElementById("studentName").value.trim(),
+        );
+
+        body.append(
+          "certificate_type",
+
+          document.getElementById("certificateType").value.trim(),
+        );
+
+        body.append(
+          "institution",
+
+          document.getElementById("institution").value.trim(),
+        );
+
+        const response = await fetch(
+          `${API_BASE_URL}/certificates/prepare`,
+
+          {
+            method: "POST",
+
+            body: body,
+          },
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.detail || "Could not prepare certificate.");
+        }
+
+        return data;
+      }
+
+      /*
+============================================================
+ISSUE CERTIFICATE
+============================================================
+*/
+
+      document
+        .getElementById("issueForm")
+        .addEventListener("submit", async (event) => {
+          event.preventDefault();
+
+          try {
+            /*
+                ------------------------------------------------
+                Connect MetaMask
+                ------------------------------------------------
+                */
+
+            if (!signer || !contract) {
+              await connectWallet();
+            }
+
+            if (!signer || !contract) {
+              return;
+            }
+
+            const file = document.getElementById("certificateFile").files[0];
+
+            if (!file) {
+              throw new Error("Choose a certificate file.");
+            }
+
+            if (file.size > 10 * 1024 * 1024) {
+              throw new Error("Maximum file size is 10 MB.");
+            }
+
+            /*
+                ------------------------------------------------
+                Backend prepares certificate
+                ------------------------------------------------
+                */
+
+            setStatus("Saving certificate and " + "calculating SHA-256...");
+
+            const prepared = await prepareCertificate();
+
+            const hash = "0x" + prepared.certificate_hash.replace(/^0x/, "");
+
+            /*
+                ------------------------------------------------
+                Ask MetaMask to sign
+                ------------------------------------------------
+                */
+
+            setStatus(
+              "Certificate prepared.\n\n" +
+                "Certificate ID: " +
+                prepared.certificate_id +
+                "\n\n" +
+                "SHA-256: " +
+                hash +
+                "\n\n" +
+                "Confirm the Sepolia transaction " +
+                "in MetaMask...",
+            );
+            console.log("=== FINAL BLOCKCHAIN VERIFICATION ===");
+
+const network = await provider.getNetwork();
+const signerAddress = await signer.getAddress();
+
+console.log("Network chain ID:", network.chainId.toString());
+console.log("Signer:", signerAddress);
+console.log("Expected contract:", CONTRACT_ADDRESS);
+
+if (Number(network.chainId) !== SEPOLIA_CHAIN_ID) {
+  throw new Error(
+    "STOP: MetaMask is not connected to Sepolia."
+  );
+}
+
+/*
+============================================================
+VERIFY THAT THE CONTRACT REALLY EXISTS AT OUR ADDRESS
+============================================================
+*/
+
+const contractCode =
+  await provider.getCode(CONTRACT_ADDRESS);
+
+console.log("Contract bytecode length:", contractCode.length);
+
+if (contractCode === "0x") {
+  throw new Error(
+    "STOP: No smart contract was found at:\n\n" +
+    CONTRACT_ADDRESS +
+    "\n\n" +
+    "Check the deployed contract address."
+  );
+}
+
+/*
+============================================================
+VERIFY CONTRACT OWNER
+============================================================
+*/
+
+const owner = await contract.owner();
+
+console.log("Contract owner:", owner);
+console.log("Connected wallet:", signerAddress);
+
+if (owner.toLowerCase() !== signerAddress.toLowerCase()) {
+  throw new Error(
+    "STOP: Connected MetaMask account is not the contract owner.\n\n" +
+    "Contract owner: " +
+    owner +
+    "\n" +
+    "Connected account: " +
+    signerAddress
+  );
+}
+
+/*
+============================================================
+BUILD TRANSACTION EXPLICITLY
+============================================================
+*/
+
+const txData =
+  contractInterface.encodeFunctionData(
+    "registerCertificate",
+    [
+      prepared.certificate_id,
+      hash
+    ]
+  );
+
+const txRequest = {
+  to: CONTRACT_ADDRESS,
+  data: txData,
+  value: 0
+};
+
+console.log("=== TRANSACTION THAT WILL BE SENT ===");
+console.log("TO:", txRequest.to);
+console.log("DATA:", txRequest.data);
+console.log("VALUE:", txRequest.value);
+
+/*
+============================================================
+FINAL SAFETY CHECK
+============================================================
+*/
+
+if (
+  txRequest.to.toLowerCase() !==
+  CONTRACT_ADDRESS.toLowerCase()
+) {
+  throw new Error(
+    "STOP: Transaction target mismatch.\n\n" +
+    "Expected: " +
+    CONTRACT_ADDRESS +
+    "\n" +
+    "Actual: " +
+    txRequest.to
+  );
+}
+
+/*
+============================================================
+SEND TO META MASK
+============================================================
+*/
+
+setStatus(
+  "Certificate prepared.\n\n" +
+  "Certificate ID: " +
+  prepared.certificate_id +
+  "\n\n" +
+  "SHA-256: " +
+  hash +
+  "\n\n" +
+  "Contract: " +
+  CONTRACT_ADDRESS +
+  "\n\n" +
+  "Confirm the Sepolia transaction in MetaMask..."
+);
+
+const tx = await signer.sendTransaction(txRequest);
+
+console.log("=== TRANSACTION RETURNED BY METAMASK ===");
+console.log("TX HASH:", tx.hash);
+console.log("TX TO:", tx.to);
+
+/*
+============================================================
+VERIFY WHAT METAMASK ACTUALLY RETURNED
+============================================================
+*/
+
+if (
+  !tx.to ||
+  tx.to.toLowerCase() !==
+  CONTRACT_ADDRESS.toLowerCase()
+) {
+  throw new Error(
+    "STOP: MetaMask returned a transaction for the wrong contract.\n\n" +
+    "Expected: " +
+    CONTRACT_ADDRESS +
+    "\n" +
+    "Actual: " +
+    tx.to
+  );
+}
+
+setStatus(
+  "Transaction submitted:\n\n" +
+  tx.hash +
+  "\n\n" +
+  "Contract:\n" +
+  tx.to +
+  "\n\n" +
+  "Waiting for confirmation..."
+);
+
+            console.log("=== TRANSACTION SENT ===");
+            console.log("TX HASH:", tx.hash);
+            console.log("TX TO:", tx.to);
+            console.log("EXPECTED CONTRACT:", CONTRACT_ADDRESS);
+
+            if (
+              !tx.to ||
+              tx.to.toLowerCase() !== CONTRACT_ADDRESS.toLowerCase()
+            ) {
+              throw new Error(
+                "STOP: Sent transaction has the wrong contract.\n\n" +
+                  "Expected: " +
+                  CONTRACT_ADDRESS +
+                  "\n" +
+                  "Actual: " +
+                  tx.to,
+              );
+            }
+
+            setStatus(
+              "Transaction submitted:\n\n" +
+                tx.hash +
+                "\n\nWaiting for confirmation...",
+            );
+
+            await tx.wait();
+
+            /*
+                ------------------------------------------------
+                Tell backend to finalize
+                ------------------------------------------------
+                */
+
+            const response = await fetch(
+              `${API_BASE_URL}/certificates/` +
+                encodeURIComponent(prepared.certificate_id) +
+                "/finalize",
+
+              {
+                method: "POST",
+
+                headers: {
+                  "Content-Type": "application/json",
+                },
+
+                body: JSON.stringify({
+                  transaction_hash: tx.hash,
+                }),
+              },
+            );
+
+            const data = await response.json();
+
+            if (!response.ok) {
+              throw new Error(data.detail || "Could not finalize certificate.");
+            }
+
+            showTransactionResult({
+  title: "CERTIFICATE REGISTERED",
+  certificateId: data.certificate_id,
+  issuer: data.issuer_address,
+  transactionHash: data.transaction_hash,
+  message:
+    "The certificate is now registered on Ethereum Sepolia."
+});
+
+            event.target.reset();
+          } catch (error) {
+            setStatus(
+              error.shortMessage || error.message || "Issuance failed.",
+
+              true,
+            );
+          }
+        });
+
+      /*
+============================================================
+REVOKE CERTIFICATE
+============================================================
+*/
+
+      document
+        .getElementById("revokeButton")
+        .addEventListener("click", async () => {
+          try {
+            if (!signer || !contract) {
+              await connectWallet();
+            }
+
+            if (!signer || !contract) {
+              return;
+            }
+
+            const certificateId = document
+              .getElementById("revokeId")
+              .value.trim();
+
+            if (!certificateId) {
+              throw new Error("Enter a certificate ID.");
+            }
+
+            setStatus("Confirm certificate revocation " + "in MetaMask...");
+
+            const tx = await contract.revokeCertificate(certificateId);
+
+            setStatus(
+              "Revocation transaction submitted:\n\n" +
+                tx.hash +
+                "\n\nWaiting for confirmation...",
+            );
+
+            await tx.wait();
+
+            showTransactionResult({
+  title: "CERTIFICATE REVOKED ON-CHAIN",
+  certificateId: certificateId,
+  transactionHash: tx.hash,
+  message:
+    "The certificate has been revoked on Ethereum Sepolia."
+});
+          } catch (error) {
+            setStatus(
+              error.shortMessage || error.message || "Revocation failed.",
+
+              true,
+            );
+          }
+        });
+    </script>
+  </body>
+</html>
